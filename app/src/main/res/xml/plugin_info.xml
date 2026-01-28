@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<smart-chip-plugin
+    xmlns:android="http://schemas.android.com/apk/res/android"
+
+    preferenceKey="show_energyua_plugin"
+
+    displayName="Плагін Energy-UA"
+    priority="3"/>

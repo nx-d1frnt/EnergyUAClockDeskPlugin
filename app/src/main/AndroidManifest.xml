@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ExampleClockDeskPlugin" >
+
+        <activity
+            android:name=".BlackoutDetailsActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AirAlert.Dialog"/>
+
+        <receiver
+            android:name=".ExampleChipReceiver"
+            android:exported="true">
+
+            <!-- Filter for the initial query from ClockDesk -->
+            <intent-filter>
+                <action android:name="com.nxd1frnt.clockdesk2.ACTION_QUERY_SMART_CHIPS" />
+            </intent-filter>
+
+            <!-- Filter for the data request from ClockDesk -->
+            <intent-filter>
+                <action android:name="com.nxd1frnt.clockdesk2.ACTION_REQUEST_CHIP_DATA" />
+            </intent-filter>
+
+            <!--
+            This meta-data links to the XML file that provides
+            information about your plugin (like its name for the settings screen).
+            -->
+            <meta-data
+                android:name="com.nxd1frnt.clockdesk2.smartchip.PLUGIN_RECEIVER"
+                android:resource="@xml/plugin_info" />
+        </receiver>
+</application>
+</manifest>
