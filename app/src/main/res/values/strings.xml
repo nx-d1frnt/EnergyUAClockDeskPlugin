@@ -1,3 +1,21 @@
 <resources>
     <string name="app_name">Energy-UA ClockDesk Plugin</string>
+    <string name="plugin_name">Energy-UA ClockDesk Plugin</string>
+    <string name="plugin_description">Плагін для відстеження відключень електроенергії з сайту energy-ua.info</string>
+    <string name="settings_title">Налаштування плагіна</string>
+    <string name="url_input_hint">Введіть посилання на вашу чергу з сайту energy-ua.info:</string>
+    <string name="url_hint_example">https://energy-ua.info/cherga/...</string>
+    <string name="btn_save">Зберегти</string>
+    <string name="details_title">Графік відключень</string>
+    <string name="loading">Завантаження...</string>
+    <string name="btn_refresh">Оновити</string>
+    <string name="error_invalid_url">Введіть коректне посилання</string>
+    <string name="settings_saved">Налаштування збережено</string>
+    <string name="last_updated">💾 Останнє оновлення: %1$s</string>
+    <string name="schedule_today">📅 ГРАФІК НА СЬОГОДНІ: \n(Світло буде відсутнє у ці години)</string>
+    <string name="schedule_tomorrow">📅 ГРАФІК НА ЗАВТРА:</string>
+    <string name="no_tomorrow_schedule">ℹ️ Графіку на завтра ще немає.</string>
+    <string name="no_data_check_settings">❌ Даних не знайдено. Перевірте посилання в налаштуваннях.</string>
+    <string name="error_prefix">❌ Помилка: %1$s</string>
+    <string name="settings_content_description">Налаштування</string>
 </resources>

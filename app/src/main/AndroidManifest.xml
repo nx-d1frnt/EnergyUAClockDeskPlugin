@@ -18,6 +18,11 @@
             android:exported="true"
             android:theme="@style/Theme.AirAlert.Dialog"/>
 
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Material3.DayNight.NoActionBar"/>
+
         <receiver
             android:name=".ExampleChipReceiver"
             android:exported="true">
