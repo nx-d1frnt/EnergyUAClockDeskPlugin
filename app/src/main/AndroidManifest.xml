@@ -21,7 +21,7 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="true"
-            android:theme="@style/Theme.Material3.DayNight.NoActionBar"/>
+            android:theme="@style/Theme.AirAlert.Settings"/>
 
         <receiver
             android:name=".ExampleChipReceiver"
