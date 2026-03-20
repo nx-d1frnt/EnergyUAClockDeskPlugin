@@ -5,13 +5,18 @@ import android.content.Context
 import android.content.Intent
 import android.location.Location
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 class ExampleChipReceiver : BroadcastReceiver() {
 
     private lateinit var scheduler: OutageScheduler
+
+    private val receiverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
 
     companion object {
         const val ACTION_REQUEST_DATA = "com.nxd1frnt.clockdesk2.ACTION_REQUEST_CHIP_DATA"
@@ -23,7 +28,7 @@ class ExampleChipReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (!::scheduler.isInitialized) {
-            scheduler = OutageScheduler(context)
+            scheduler = OutageScheduler(context.applicationContext)
         }
 
         if (intent.action == ACTION_REQUEST_DATA) {
@@ -32,7 +37,7 @@ class ExampleChipReceiver : BroadcastReceiver() {
             // Використовуємо goAsync() для фонової роботи
             val pendingResult = goAsync()
 
-            GlobalScope.launch(Dispatchers.IO) {
+            receiverScope.launch{
                 try {
                     // 1. Оновлення кешу, якщо він прострочений (10 хвилин)
                     // Або використовуємо старий кеш, якщо немає інтернету
@@ -52,7 +57,7 @@ class ExampleChipReceiver : BroadcastReceiver() {
                         putExtra("chip_text", chipText)
                         putExtra("chip_icon_name", iconName)
                         putExtra("chip_click_activity", ".BlackoutDetailsActivity")
-
+                        // Просимо ClockDesk смикнути нас ще раз через 60 секунд
                         putExtra("update_interval_seconds", UPDATE_INTERVAL_SEC)
                     }
 
@@ -70,6 +75,7 @@ class ExampleChipReceiver : BroadcastReceiver() {
                     }
                     context.sendBroadcast(errorIntent)
                 } finally {
+                    // Обов'язково завершуємо Broadcast, інакше система покарає ANR
                     pendingResult.finish()
                 }
             }
