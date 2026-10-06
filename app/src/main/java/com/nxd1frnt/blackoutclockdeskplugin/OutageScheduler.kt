@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.jsoup.Jsoup
 import java.io.File
+import java.time.LocalDate
 import java.time.LocalTime
 import java.time.temporal.ChronoUnit
 import java.time.format.DateTimeFormatter
@@ -15,9 +16,10 @@ import java.util.*
 
 data class OutageInterval(val start: String, val end: String, val duration: String)
 
-// ОНОВЛЕНО: Кеш тепер містить графік на сьогодні і на завтра
+// ОНОВЛЕНО: Кеш містить дату, графік на сьогодні і на завтра
 data class OutageCache(
     val timestamp: Long = System.currentTimeMillis(),
+    val cacheDate: String = LocalDate.now().toString(), // ISO-8601: YYYY-MM-DD
     val intervalsToday: List<OutageInterval>,
     val intervalsTomorrow: List<OutageInterval>? = null // Може бути null, якщо графіку ще немає
 )
@@ -49,18 +51,32 @@ class OutageScheduler(private val context: Context) {
     private val gson = Gson()
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
+    fun clearCache() {
+        try {
+            val cacheFile = File(context.cacheDir, CACHE_FILE_NAME)
+            if (cacheFile.exists()) {
+                cacheFile.delete()
+                Log.d(TAG, "Кеш очищено")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Помилка очищення кешу", e)
+        }
+    }
+
     suspend fun getCachedSchedule(): OutageCache? = withContext(Dispatchers.IO) {
         loadCache()
     }
 
     suspend fun fetchAndCacheIfNeeded(): OutageCache? {
         val cachedData = loadCache()
-        val isCacheExpired = cachedData == null || (System.currentTimeMillis() - cachedData.timestamp > CACHE_EXPIRATION_MS)
+        val todayStr = LocalDate.now().toString()
+        val isDifferentDay = cachedData?.cacheDate != null && cachedData.cacheDate != todayStr
+        val isTimeExpired = cachedData == null || (System.currentTimeMillis() - cachedData.timestamp > CACHE_EXPIRATION_MS)
+        val isCacheExpired = isTimeExpired || isDifferentDay
 
         if (isCacheExpired) {
             val newData = fetchScheduleFromWeb()
-            // Перевіряємо, чи ми отримали хоча б сьогоднішній графік
-            if (newData != null && newData.intervalsToday.isNotEmpty()) {
+            if (newData != null) {
                 saveCache(newData)
                 Log.i(TAG, "Графік оновлено. Сьогодні: ${newData.intervalsToday.size}, Завтра: ${newData.intervalsTomorrow?.size ?: 0}")
                 return newData
@@ -75,17 +91,19 @@ class OutageScheduler(private val context: Context) {
     suspend fun fetchScheduleFromWeb(): OutageCache? {
         return try {
             Log.d(TAG, "Починаємо завантаження через WebView: $currentUrl")
-            val html = withTimeout(25000L) {
+            val html = withTimeout(12000L) {
                 WebViewFetcher(context).fetchHtml(currentUrl)
             }
 
             val doc = Jsoup.parse(html)
 
-            // Знаходимо ВСІ блоки з графіками
+            // Знаходимо блоки з графіками ТА блоки "немає даних"
             val containers = doc.select("div.periods_items")
+            val noDataElements = doc.select("div.no_data")
 
-            if (containers.isEmpty()) {
-                Log.e(TAG, "ПОМИЛКА: Не знайдено жодного контейнера div.periods_items")
+            // Якщо на сторінці взагалі немає ні графіків, ні повідомлень "немає даних" — це реальна помилка
+            if (containers.isEmpty() && noDataElements.isEmpty()) {
+                Log.e(TAG, "ПОМИЛКА: Не знайдено ні periods_items, ні no_data")
                 return null
             }
 
@@ -105,19 +123,15 @@ class OutageScheduler(private val context: Context) {
                 return list
             }
 
-            // Перший блок - завжди "Сьогодні"
-            val todayList = parseContainer(containers[0])
+            // Якщо контейнери є - парсимо, якщо ні - відключень немає (пустий список)
+            val todayList = if (containers.isNotEmpty()) parseContainer(containers[0]) else emptyList()
+            val tomorrowList = if (containers.size > 1) parseContainer(containers[1]) else emptyList()
 
-            // Другий блок (якщо є) - "Завтра"
-            val tomorrowList = if (containers.size > 1) {
-                parseContainer(containers[1])
-            } else {
-                null
-            }
+            Log.d(TAG, "Знайдено інтервалів: Сьогодні=${todayList.size}, Завтра=${tomorrowList.size}")
 
-            Log.d(TAG, "Знайдено інтервалів: Сьогодні=${todayList.size}, Завтра=${tomorrowList?.size ?: 0}")
-
-            OutageCache(
+            return OutageCache(
+                timestamp = System.currentTimeMillis(),
+                cacheDate = LocalDate.now().toString(),
                 intervalsToday = todayList,
                 intervalsTomorrow = tomorrowList
             )
@@ -136,13 +150,30 @@ class OutageScheduler(private val context: Context) {
             val json = cacheFile.readText()
             val cache = gson.fromJson(json, OutageCache::class.java)
 
-            // --- ВИПРАВЛЕННЯ ---
-            // Gson може створити об'єкт з null полями, якщо JSON старий.
-            // Перевіряємо це вручну:
+            // Перевіряємо цілісність кешу (Gson може залишити null у не-nullable полі)
+            @Suppress("SENSELESS_COMPARISON")
             if (cache == null || cache.intervalsToday == null) {
-                Log.w(TAG, "Кеш пошкоджений або застарів (intervalsToday is null). Видаляємо.")
+                Log.w(TAG, "Кеш пошкоджений або застарів. Видаляємо.")
                 cacheFile.delete()
                 return null
+            }
+
+            val todayStr = LocalDate.now().toString()
+            val cacheDateStr = cache.cacheDate ?: todayStr
+            val yesterdayStr = LocalDate.now().minusDays(1).toString()
+
+            // Перевірка переходу через опівніч:
+            // Якщо дата вчорашня і був розклад на завтра, робимо роловер на сьогодні
+            if (cacheDateStr == yesterdayStr && !cache.intervalsTomorrow.isNullOrEmpty()) {
+                Log.i(TAG, "Перехід через північ: оновлюємо розклад з учорашнього 'завтра' на сьогодні.")
+                val rolledOverCache = OutageCache(
+                    timestamp = System.currentTimeMillis(),
+                    cacheDate = todayStr,
+                    intervalsToday = cache.intervalsTomorrow,
+                    intervalsTomorrow = null
+                )
+                saveCache(rolledOverCache)
+                return rolledOverCache
             }
 
             cache
@@ -161,8 +192,8 @@ class OutageScheduler(private val context: Context) {
     // --- Логіка таймера ---
 
     fun getCountdownInfo(cache: OutageCache?): CountdownInfo {
-        if (cache == null || cache.intervalsToday.isEmpty()) {
-            return CountdownInfo("ДАНИХ НЕМАЄ", "00:00 хв", "—")
+        if (cache == null) {
+            return CountdownInfo("ДАНИХ НЕМАЄ", "—", "—")
         }
 
         val now = LocalTime.now()
@@ -230,8 +261,7 @@ class OutageScheduler(private val context: Context) {
 
         // 3. Формування результату
         if (nextEventTime == null) {
-            // Якщо і завтра графік пустий
-            return CountdownInfo("СВІТЛО Є", "—", "Графік невідомий")
+            return CountdownInfo("СВІТЛО Є", "—", "Відключень немає")
         }
 
         // Розрахунок різниці в часі
@@ -261,13 +291,30 @@ class OutageScheduler(private val context: Context) {
     }
 
     // Хелпери
-    private fun parseIntervals(rawList: List<OutageInterval>): List<Pair<LocalTime, LocalTime>> {
+    private fun normalizeTime(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed == "24:00" || trimmed == "24:00:00") return "23:59"
+        val parts = trimmed.split(":")
+        if (parts.size >= 2) {
+            val h = parts[0].padStart(2, '0')
+            val m = parts[1].padStart(2, '0')
+            return "$h:$m"
+        }
+        return trimmed
+    }
+
+    fun parseIntervals(rawList: List<OutageInterval>): List<Pair<LocalTime, LocalTime>> {
         return rawList.mapNotNull { interval ->
             try {
-                val start = LocalTime.parse(interval.start, timeFormatter)
-                val end = LocalTime.parse(interval.end, timeFormatter)
+                val startStr = normalizeTime(interval.start)
+                val endStr = normalizeTime(interval.end)
+                val start = LocalTime.parse(startStr, timeFormatter)
+                val end = LocalTime.parse(endStr, timeFormatter)
                 if (end.isBefore(start)) listOf(start to LocalTime.MAX, LocalTime.MIN to end) else listOf(start to end)
-            } catch (e: Exception) { null }
+            } catch (e: Exception) {
+                Log.w(TAG, "Помилка парсингу інтервалу: ${interval.start} - ${interval.end}", e)
+                null
+            }
         }.flatten()
     }
 

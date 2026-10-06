@@ -6,40 +6,67 @@ import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class WebViewFetcher(private val context: Context) {
 
     suspend fun fetchHtml(url: String): String = suspendCancellableCoroutine { continuation ->
-        // Використовуємо Handler для запуску в Main Thread
+        val isCompleted = AtomicBoolean(false)
+
         Handler(Looper.getMainLooper()).post {
-            // Змінна для зберігання посилання на webView, щоб знищити його потім
             var webView: WebView? = null
 
-            try {
-                // Використовуємо applicationContext, щоб уникнути витоків пам'яті
-                webView = WebView(context.applicationContext)
-
-                webView.settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    // Маскуємось під звичайний Android
-                    userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+            fun destroyWebView(targetView: WebView? = webView) {
+                try {
+                    targetView?.apply {
+                        stopLoading()
+                        clearHistory()
+                        clearCache(true)
+                        loadUrl("about:blank")
+                        destroy()
+                    }
+                    webView = null
+                    WebStorage.getInstance().deleteAllData()
+                    CoroutineScope(Dispatchers.IO).launch {
+                        cleanWebViewCache(context)
+                    }
+                } catch (e: Exception) {
+                    Log.e("WebViewFetcher", "Error destroying webview", e)
                 }
+            }
 
-                // ВАЖЛИВО: Програмний рендеринг стабільніший у фонових процесах
-                webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            continuation.invokeOnCancellation {
+                Handler(Looper.getMainLooper()).post {
+                    destroyWebView()
+                }
+            }
 
-                webView.webViewClient = object : WebViewClient() {
+            try {
+                val createdWebView = WebView(context.applicationContext).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                    settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                    setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                }
+                webView = createdWebView
+
+                createdWebView.webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
-                        // Даємо Cloudflare 4 секунди на роздуми
                         Handler(Looper.getMainLooper()).postDelayed({
-                            if (continuation.isActive) {
+                            if (!isCompleted.get() && continuation.isActive) {
                                 view?.evaluateJavascript(
                                     "(function() { return '<html>'+document.getElementsByTagName('html')[0].innerHTML+'</html>'; })();"
                                 ) { html ->
@@ -48,45 +75,78 @@ class WebViewFetcher(private val context: Context) {
                                             ?.replace("\\\"", "\"")
                                             ?.trim('"') ?: ""
 
-                                        if (continuation.isActive) {
+                                        if (isCompleted.compareAndSet(false, true)) {
                                             continuation.resume(cleanHtml)
                                         }
                                     } catch (e: Exception) {
-                                        if (continuation.isActive) continuation.resumeWithException(e)
+                                        if (isCompleted.compareAndSet(false, true)) {
+                                            continuation.resumeWithException(e)
+                                        }
                                     } finally {
-                                        // Очищення
-                                        webView?.destroy()
+                                        destroyWebView(view)
                                     }
                                 }
+                            } else {
+                                destroyWebView(view)
                             }
-                        }, 4000)
+                        }, 2500)
                     }
 
                     override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
                         Log.e("WebViewFetcher", "Error: $description")
-                        // Не перериваємо, бо іноді помилки (наприклад favicon) не критичні
                     }
 
-                    // КРИТИЧНО: Обробка падіння процесу рендерингу (ваш випадок)
                     override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
                         Log.e("WebViewFetcher", "WebView Render Process Crashed!")
-                        if (continuation.isActive) {
+                        if (isCompleted.compareAndSet(false, true)) {
                             continuation.resumeWithException(RuntimeException("WebView Render Process Crashed"))
                         }
-                        webView?.destroy()
-                        return true // Process handled
+                        destroyWebView(view)
+                        return true
                     }
                 }
 
-                webView.loadUrl(url)
+                createdWebView.loadUrl(url)
 
             } catch (e: Exception) {
                 Log.e("WebViewFetcher", "Setup Error: ${e.message}")
-                if (continuation.isActive) {
+                if (isCompleted.compareAndSet(false, true)) {
                     continuation.resumeWithException(e)
                 }
-                webView?.destroy()
+                destroyWebView()
             }
+        }
+    }
+
+    companion object {
+        fun cleanWebViewCache(context: Context) {
+            try {
+                val webViewCacheDir = File(context.cacheDir, "WebView")
+                if (webViewCacheDir.exists()) {
+                    deleteDir(webViewCacheDir)
+                }
+                val orgChromiumDir = File(context.cacheDir, "org.chromium.android_webview")
+                if (orgChromiumDir.exists()) {
+                    deleteDir(orgChromiumDir)
+                }
+            } catch (e: Exception) {
+                Log.e("WebViewFetcher", "Failed to clean webview cache dir", e)
+            }
+        }
+
+        private fun deleteDir(dir: File?): Boolean {
+            if (dir != null && dir.isDirectory) {
+                val children = dir.listFiles()
+                if (children != null) {
+                    for (child in children) {
+                        deleteDir(child)
+                    }
+                }
+                return dir.delete()
+            } else if (dir != null && dir.isFile) {
+                return dir.delete()
+            }
+            return false
         }
     }
 }
