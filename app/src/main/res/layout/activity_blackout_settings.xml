@@ -47,23 +47,80 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/url_input_hint"
+                        android:text="@string/data_source_title"
                         android:textColor="@color/md_theme_onSurface"
                         android:textSize="14sp"
                         android:textStyle="bold"
-                        android:layout_marginBottom="12dp"/>
+                        android:layout_marginBottom="8dp"/>
 
-                    <com.google.android.material.textfield.TextInputLayout
+                    <RadioGroup
+                        android:id="@+id/rgDataSource"
                         android:layout_width="match_parent"
-                        android:layout_height="wrap_content">
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp">
 
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etUrl"
+                        <RadioButton
+                            android:id="@+id/rbSourceEnergyUa"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:hint="@string/url_hint_example"
-                            android:inputType="textUri" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                            android:text="@string/source_energy_ua"
+                            android:textSize="13sp" />
+
+                        <RadioButton
+                            android:id="@+id/rbSourcePoe"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/source_poe"
+                            android:textSize="13sp" />
+                    </RadioGroup>
+
+                    <LinearLayout
+                        android:id="@+id/layoutEnergyUaUrl"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/url_input_hint"
+                            android:textColor="@color/md_theme_onSurface"
+                            android:textSize="13sp"
+                            android:layout_marginBottom="8dp"/>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/etUrl"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/url_hint_example"
+                                android:inputType="textUri" />
+                        </com.google.android.material.textfield.TextInputLayout>
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/layoutPoeQueue"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/poe_queue_hint"
+                            android:textColor="@color/md_theme_onSurface"
+                            android:textSize="13sp"
+                            android:layout_marginBottom="8dp"/>
+
+                        <Spinner
+                            android:id="@+id/spinnerPoeQueue"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp" />
+                    </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

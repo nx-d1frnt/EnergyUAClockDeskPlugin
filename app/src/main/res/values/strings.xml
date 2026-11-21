@@ -49,4 +49,10 @@
     <string name="visibility_warning_60">За 60 хв</string>
     <string name="schedule_intervals_title">Інтервали відключень</string>
     <string name="settings_content_description">Налаштування</string>
+    <string name="data_source_title">Джерело даних</string>
+    <string name="source_energy_ua">Energy-UA (energy-ua.info)</string>
+    <string name="source_poe">ПолтаваОблЕнерго (ПОЕ)</string>
+    <string name="poe_queue_hint">Оберіть чергу ПОЕ:</string>
+    <string name="poe_queue_badge">ПОЕ • Черга %1$s</string>
+    <string name="changes_title">Зміни в графіку (%1$s)</string>
 </resources>

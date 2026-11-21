@@ -130,6 +130,70 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
+            <!-- Аварійне попередження (ГАВ / СГАВ) -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardEmergency"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:visibility="gone"
+                app:cardBackgroundColor="#FFEBEE"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                app:strokeColor="#EF5350"
+                app:strokeWidth="1dp">
+
+                <TextView
+                    android:id="@+id/tvEmergencyMessage"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:padding="10dp"
+                    android:textColor="#B71C1C"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    tools:text="Увага! Застосовано ГАВ! Графіки можуть не діяти" />
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Зміни в графіку -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardChanges"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:visibility="gone"
+                app:cardBackgroundColor="@color/md_theme_surfaceContainerLow"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/md_theme_outlineVariant"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="10dp">
+
+                    <TextView
+                        android:id="@+id/tvChangesTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/md_theme_primary"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="4dp"
+                        tools:text="Зміни в графіку (14:20)" />
+
+                    <TextView
+                        android:id="@+id/tvChangesList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/md_theme_onSurface"
+                        android:textSize="12sp"
+                        android:lineSpacingExtra="2dp"
+                        tools:text="• Раніше вимкнуть: о 09:00 замість 10:00 (-1 год)" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
             <!-- 24-годинна візуальна шкала -->
             <com.nxd1frnt.blackoutclockdeskplugin.TimelineView
                 android:id="@+id/timelineView"

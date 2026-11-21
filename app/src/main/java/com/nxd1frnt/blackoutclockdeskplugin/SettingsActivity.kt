@@ -3,10 +3,12 @@ package com.nxd1frnt.blackoutclockdeskplugin
 import android.content.Context
 import android.os.Bundle
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.Spinner
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.edit
@@ -16,6 +18,12 @@ import com.google.android.material.textfield.TextInputLayout
 
 class SettingsActivity : AppCompatActivity() {
 
+    private lateinit var rgDataSource: RadioGroup
+    private lateinit var rbSourceEnergyUa: RadioButton
+    private lateinit var rbSourcePoe: RadioButton
+    private lateinit var layoutEnergyUaUrl: LinearLayout
+    private lateinit var layoutPoeQueue: LinearLayout
+    private lateinit var spinnerPoeQueue: Spinner
     private lateinit var etUrl: TextInputEditText
 
     // Формат тексту
@@ -56,7 +64,20 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun initViews() {
+        rgDataSource = findViewById(R.id.rgDataSource)
+        rbSourceEnergyUa = findViewById(R.id.rbSourceEnergyUa)
+        rbSourcePoe = findViewById(R.id.rbSourcePoe)
+        layoutEnergyUaUrl = findViewById(R.id.layoutEnergyUaUrl)
+        layoutPoeQueue = findViewById(R.id.layoutPoeQueue)
+        spinnerPoeQueue = findViewById(R.id.spinnerPoeQueue)
         etUrl = findViewById(R.id.etUrl)
+
+        val queueLabels = PoeScheduleClient.ALL_QUEUES.map { "Черга $it" }
+        spinnerPoeQueue.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            queueLabels
+        )
 
         rgFormat = findViewById(R.id.rgFormat)
         rbDetailed = findViewById(R.id.rbDetailed)
@@ -82,6 +103,12 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
+        rgDataSource.setOnCheckedChangeListener { _, checkedId ->
+            val isPoe = checkedId == R.id.rbSourcePoe
+            layoutEnergyUaUrl.visibility = if (isPoe) View.GONE else View.VISIBLE
+            layoutPoeQueue.visibility = if (isPoe) View.VISIBLE else View.GONE
+        }
+
         rgFormat.setOnCheckedChangeListener { _, checkedId ->
             tilCustomTemplate.visibility = if (checkedId == R.id.rbCustom) View.VISIBLE else View.GONE
         }
@@ -91,9 +118,14 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         btnSave.setOnClickListener {
+            val isPoe = rgDataSource.checkedRadioButtonId == R.id.rbSourcePoe
             val newUrl = etUrl.text.toString().trim()
-            if (newUrl.isNotEmpty() && (newUrl.contains("energy-ua.info") || newUrl.contains("http"))) {
-                saveSettings(newUrl)
+            if (isPoe || (newUrl.isNotEmpty() && (newUrl.contains("energy-ua.info") || newUrl.contains("http")))) {
+                val selectedQueue = PoeScheduleClient.ALL_QUEUES.getOrElse(spinnerPoeQueue.selectedItemPosition) {
+                    OutageScheduler.DEFAULT_POE_QUEUE
+                }
+                val source = if (isPoe) OutageScheduler.SOURCE_POE else OutageScheduler.SOURCE_ENERGY_UA
+                saveSettings(source, newUrl.ifEmpty { OutageScheduler.DEFAULT_URL }, selectedQueue)
                 finish()
             } else {
                 Toast.makeText(this, getString(R.string.error_invalid_url), Toast.LENGTH_SHORT).show()
@@ -103,8 +135,23 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun loadSettings() {
         val prefs = getSharedPreferences(OutageScheduler.PREFS_NAME, Context.MODE_PRIVATE)
+        val dataSource = prefs.getString(OutageScheduler.KEY_DATA_SOURCE, OutageScheduler.SOURCE_ENERGY_UA)
         val savedUrl = prefs.getString(OutageScheduler.KEY_URL, OutageScheduler.DEFAULT_URL)
+        val savedQueue = prefs.getString(OutageScheduler.KEY_POE_QUEUE, OutageScheduler.DEFAULT_POE_QUEUE)
+
         etUrl.setText(savedUrl)
+        val queueIndex = PoeScheduleClient.ALL_QUEUES.indexOf(savedQueue).coerceAtLeast(0)
+        spinnerPoeQueue.setSelection(queueIndex)
+
+        if (dataSource == OutageScheduler.SOURCE_POE) {
+            rbSourcePoe.isChecked = true
+            layoutEnergyUaUrl.visibility = View.GONE
+            layoutPoeQueue.visibility = View.VISIBLE
+        } else {
+            rbSourceEnergyUa.isChecked = true
+            layoutEnergyUaUrl.visibility = View.VISIBLE
+            layoutPoeQueue.visibility = View.GONE
+        }
 
         // 1. Формат тексту
         val formatType = prefs.getString(ChipFormatter.KEY_FORMAT_TYPE, ChipFormatter.FORMAT_DETAILED)
@@ -142,9 +189,11 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun saveSettings(url: String) {
+    private fun saveSettings(dataSource: String, url: String, poeQueue: String) {
         val prefs = getSharedPreferences(OutageScheduler.PREFS_NAME, Context.MODE_PRIVATE)
+        val oldSource = prefs.getString(OutageScheduler.KEY_DATA_SOURCE, OutageScheduler.SOURCE_ENERGY_UA)
         val oldUrl = prefs.getString(OutageScheduler.KEY_URL, "")
+        val oldQueue = prefs.getString(OutageScheduler.KEY_POE_QUEUE, OutageScheduler.DEFAULT_POE_QUEUE)
 
         // 1. Формат тексту
         val selectedFormat = when (rgFormat.checkedRadioButtonId) {
@@ -174,14 +223,16 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         prefs.edit {
+            putString(OutageScheduler.KEY_DATA_SOURCE, dataSource)
             putString(OutageScheduler.KEY_URL, url)
+            putString(OutageScheduler.KEY_POE_QUEUE, poeQueue)
             putString(ChipFormatter.KEY_FORMAT_TYPE, selectedFormat)
             putString(ChipFormatter.KEY_CUSTOM_TEMPLATE, customTemplate)
             putString(ChipVisibilityManager.KEY_VISIBILITY_MODE, selectedVisibility)
             putInt(ChipVisibilityManager.KEY_WARNING_MINUTES, selectedWarningMinutes)
         }
 
-        if (oldUrl != url) {
+        if (oldSource != dataSource || oldUrl != url || oldQueue != poeQueue) {
             OutageScheduler(this).clearCache()
         }
 

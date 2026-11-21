@@ -16,12 +16,27 @@ import java.util.*
 
 data class OutageInterval(val start: String, val end: String, val duration: String)
 
+private data class ScheduleSegment(
+    val from: Int = 0,
+    val to: Int = 0,
+    val status: String? = null
+)
+
+private data class SchedulePayload(
+    val today: List<ScheduleSegment>? = null,
+    val tomorrow: List<ScheduleSegment>? = null
+)
+
 // ОНОВЛЕНО: Кеш містить дату, графік на сьогодні і на завтра
 data class OutageCache(
     val timestamp: Long = System.currentTimeMillis(),
     val cacheDate: String = LocalDate.now().toString(), // ISO-8601: YYYY-MM-DD
     val intervalsToday: List<OutageInterval>,
-    val intervalsTomorrow: List<OutageInterval>? = null // Може бути null, якщо графіку ще немає
+    val intervalsTomorrow: List<OutageInterval>? = null, // Може бути null, якщо графіку ще немає
+    val sourceId: String? = null,
+    val changes: List<String>? = null,
+    val changesTimestamp: Long? = null,
+    val emergencyMessage: String? = null
 )
 
 data class CountdownInfo(
@@ -40,13 +55,54 @@ class OutageScheduler(private val context: Context) {
         const val PREFS_NAME = "blackout_plugin_prefs"
         const val KEY_URL = "target_url"
         const val DEFAULT_URL = "https://energy-ua.info/cherga/5-2"
+        const val KEY_DATA_SOURCE = "data_source"
+        const val SOURCE_ENERGY_UA = "energy_ua"
+        const val SOURCE_POE = "poe"
+        const val KEY_POE_QUEUE = "poe_queue"
+        const val DEFAULT_POE_QUEUE = "5.2"
+
+        internal fun formatMinutes(minutes: Int): String {
+            if (minutes >= 1440) return "24:00"
+            val h = minutes / 60
+            val m = minutes % 60
+            return String.format(Locale.US, "%02d:%02d", h, m)
+        }
+
+        internal fun formatDurationMinutes(totalMinutes: Int): String {
+            return when {
+                totalMinutes % 60 == 0 -> "${totalMinutes / 60}"
+                totalMinutes % 30 == 0 -> "${totalMinutes / 60}.5"
+                totalMinutes < 60 -> "$totalMinutes хв"
+                else -> "${totalMinutes / 60} год ${totalMinutes % 60} хв"
+            }
+        }
     }
+
+    private val currentDataSource: String
+        get() {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            return prefs.getString(KEY_DATA_SOURCE, SOURCE_ENERGY_UA) ?: SOURCE_ENERGY_UA
+        }
 
     private val currentUrl: String
         get() {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             return prefs.getString(KEY_URL, DEFAULT_URL) ?: DEFAULT_URL
         }
+
+    private val currentPoeQueue: String
+        get() {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            return prefs.getString(KEY_POE_QUEUE, DEFAULT_POE_QUEUE) ?: DEFAULT_POE_QUEUE
+        }
+
+    private fun currentSourceId(): String {
+        return if (currentDataSource == SOURCE_POE) {
+            "$SOURCE_POE:$currentPoeQueue"
+        } else {
+            "$SOURCE_ENERGY_UA:$currentUrl"
+        }
+    }
 
     private val gson = Gson()
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
@@ -71,11 +127,12 @@ class OutageScheduler(private val context: Context) {
         val cachedData = loadCache()
         val todayStr = LocalDate.now().toString()
         val isDifferentDay = cachedData?.cacheDate != null && cachedData.cacheDate != todayStr
+        val isDifferentSource = cachedData?.sourceId != null && cachedData.sourceId != currentSourceId()
         val isTimeExpired = cachedData == null || (System.currentTimeMillis() - cachedData.timestamp > CACHE_EXPIRATION_MS)
-        val isCacheExpired = isTimeExpired || isDifferentDay
+        val isCacheExpired = isTimeExpired || isDifferentDay || isDifferentSource
 
         if (isCacheExpired) {
-            val newData = fetchScheduleFromWeb()
+            val newData = fetchAndMergeWithOldCache(cachedData)
             if (newData != null) {
                 saveCache(newData)
                 Log.i(TAG, "Графік оновлено. Сьогодні: ${newData.intervalsToday.size}, Завтра: ${newData.intervalsTomorrow?.size ?: 0}")
@@ -88,57 +145,161 @@ class OutageScheduler(private val context: Context) {
         return cachedData
     }
 
+    suspend fun forceRefresh(): OutageCache? {
+        val cachedData = loadCache()
+        val newData = fetchAndMergeWithOldCache(cachedData)
+        if (newData != null) {
+            saveCache(newData)
+        }
+        return newData
+    }
+
+    private suspend fun fetchAndMergeWithOldCache(oldCache: OutageCache?): OutageCache? {
+        val fetched = fetchScheduleFromWeb() ?: return null
+        val sourceId = currentSourceId()
+        val sameDayAndSource = oldCache != null &&
+            oldCache.cacheDate == fetched.cacheDate &&
+            (oldCache.sourceId == null || oldCache.sourceId == sourceId)
+
+        if (!sameDayAndSource) {
+            return fetched.copy(sourceId = sourceId)
+        }
+
+        val newDiffs = ScheduleDiffCalculator.compareCaches(oldCache!!, fetched)
+        return if (newDiffs.isNotEmpty()) {
+            Log.i(TAG, "Виявлено зміни в графіку: ${newDiffs.size}")
+            fetched.copy(
+                sourceId = sourceId,
+                changes = newDiffs,
+                changesTimestamp = fetched.timestamp
+            )
+        } else {
+            fetched.copy(
+                sourceId = sourceId,
+                changes = oldCache.changes,
+                changesTimestamp = oldCache.changesTimestamp
+            )
+        }
+    }
+
     suspend fun fetchScheduleFromWeb(): OutageCache? {
         return try {
-            Log.d(TAG, "Починаємо завантаження через WebView: $currentUrl")
-            val html = withTimeout(12000L) {
-                WebViewFetcher(context).fetchHtml(currentUrl)
-            }
-
-            val doc = Jsoup.parse(html)
-
-            // Знаходимо блоки з графіками ТА блоки "немає даних"
-            val containers = doc.select("div.periods_items")
-            val noDataElements = doc.select("div.no_data")
-
-            // Якщо на сторінці взагалі немає ні графіків, ні повідомлень "немає даних" — це реальна помилка
-            if (containers.isEmpty() && noDataElements.isEmpty()) {
-                Log.e(TAG, "ПОМИЛКА: Не знайдено ні periods_items, ні no_data")
-                return null
-            }
-
-            // Функція-хелпер для парсингу одного контейнера
-            fun parseContainer(container: org.jsoup.nodes.Element): List<OutageInterval> {
-                val list = mutableListOf<OutageInterval>()
-                container.select("span").forEach { span ->
-                    val bTags = span.select("b")
-                    if (bTags.size >= 3) {
-                        list.add(OutageInterval(
-                            start = bTags[0].text().trim(),
-                            end = bTags[1].text().trim(),
-                            duration = bTags[2].text().replace("год.", "").trim()
-                        ))
-                    }
+            val result = if (currentDataSource == SOURCE_POE) {
+                Log.d(TAG, "Починаємо завантаження з ПОЕ для черги $currentPoeQueue")
+                PoeScheduleClient.fetchSchedule(currentPoeQueue)
+            } else {
+                Log.d(TAG, "Починаємо завантаження через WebView: $currentUrl")
+                val html = withTimeout(12000L) {
+                    WebViewFetcher(context).fetchHtml(currentUrl)
                 }
-                return list
+                parseHtmlSchedule(html)
             }
 
-            // Якщо контейнери є - парсимо, якщо ні - відключень немає (пустий список)
-            val todayList = if (containers.isNotEmpty()) parseContainer(containers[0]) else emptyList()
-            val tomorrowList = if (containers.size > 1) parseContainer(containers[1]) else emptyList()
-
-            Log.d(TAG, "Знайдено інтервалів: Сьогодні=${todayList.size}, Завтра=${tomorrowList.size}")
-
-            return OutageCache(
-                timestamp = System.currentTimeMillis(),
-                cacheDate = LocalDate.now().toString(),
-                intervalsToday = todayList,
-                intervalsTomorrow = tomorrowList
-            )
-
+            if (result == null) {
+                Log.e(TAG, "ПОМИЛКА: Не вдалося отримати або розпарсити графік ($currentDataSource)")
+            } else {
+                Log.d(TAG, "Знайдено інтервалів: Сьогодні=${result.intervalsToday.size}, Завтра=${result.intervalsTomorrow?.size ?: 0}")
+            }
+            result
         } catch (e: Exception) {
             Log.e(TAG, "Помилка завантаження: ${e.message}")
             null
+        }
+    }
+
+    internal fun parseHtmlSchedule(html: String): OutageCache? {
+        val doc = Jsoup.parse(html)
+
+        // Новий дизайн сайту: JSON у <script id="schedulePayload" type="application/json">
+        val payloadElement = doc.selectFirst("script#schedulePayload")
+        if (payloadElement != null) {
+            val jsonText = payloadElement.data().ifBlank { payloadElement.html() }.trim()
+            if (jsonText.isNotEmpty()) {
+                return try {
+                    val payload = gson.fromJson(jsonText, SchedulePayload::class.java)
+                    if (payload == null || (payload.today == null && payload.tomorrow == null)) {
+                        null
+                    } else {
+                        val todayList = parsePayloadSegments(payload.today.orEmpty())
+                        val tomorrowList = parsePayloadSegments(payload.tomorrow.orEmpty())
+                        OutageCache(
+                            timestamp = System.currentTimeMillis(),
+                            cacheDate = LocalDate.now().toString(),
+                            intervalsToday = todayList,
+                            intervalsTomorrow = tomorrowList
+                        )
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }
+
+        // Fallback для старого дизайну (div.periods_items / div.no_data)
+        val containers = doc.select("div.periods_items")
+        val noDataElements = doc.select("div.no_data")
+
+        if (containers.isEmpty() && noDataElements.isEmpty()) {
+            return null
+        }
+
+        fun parseContainer(container: org.jsoup.nodes.Element): List<OutageInterval> {
+            val list = mutableListOf<OutageInterval>()
+            container.select("span").forEach { span ->
+                val bTags = span.select("b")
+                if (bTags.size >= 3) {
+                    list.add(OutageInterval(
+                        start = bTags[0].text().trim(),
+                        end = bTags[1].text().trim(),
+                        duration = bTags[2].text().replace("год.", "").trim()
+                    ))
+                }
+            }
+            return list
+        }
+
+        val todayList = if (containers.isNotEmpty()) parseContainer(containers[0]) else emptyList()
+        val tomorrowList = if (containers.size > 1) parseContainer(containers[1]) else emptyList()
+
+        return OutageCache(
+            timestamp = System.currentTimeMillis(),
+            cacheDate = LocalDate.now().toString(),
+            intervalsToday = todayList,
+            intervalsTomorrow = tomorrowList
+        )
+    }
+
+    private fun parsePayloadSegments(segments: List<ScheduleSegment>): List<OutageInterval> {
+        val redSegments = segments
+            .asSequence()
+            .filter { it.status == "red" }
+            .map { seg ->
+                val start = seg.from.coerceIn(0, 1440)
+                val end = seg.to.coerceIn(0, 1440)
+                start to end
+            }
+            .filter { (start, end) -> end > start }
+            .sortedBy { it.first }
+            .toList()
+
+        if (redSegments.isEmpty()) return emptyList()
+
+        val merged = mutableListOf<Pair<Int, Int>>()
+        for ((start, end) in redSegments) {
+            val last = merged.lastOrNull()
+            if (last != null && start <= last.second) {
+                merged[merged.lastIndex] = last.first to maxOf(last.second, end)
+            } else {
+                merged.add(start to end)
+            }
+        }
+
+        return merged.map { (start, end) ->
+            OutageInterval(
+                start = formatMinutes(start),
+                end = formatMinutes(end),
+                duration = formatDurationMinutes(end - start)
+            )
         }
     }
 

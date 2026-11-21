@@ -40,6 +40,11 @@ class BlackoutDetailsActivity : AppCompatActivity() {
     private lateinit var ivStatusIcon: ImageView
     private lateinit var tvStatusTitle: TextView
     private lateinit var tvStatusSubtitle: TextView
+    private lateinit var cardEmergency: MaterialCardView
+    private lateinit var tvEmergencyMessage: TextView
+    private lateinit var cardChanges: MaterialCardView
+    private lateinit var tvChangesTitle: TextView
+    private lateinit var tvChangesList: TextView
     private lateinit var timelineView: TimelineView
     private lateinit var toggleDayGroup: MaterialButtonToggleGroup
     private lateinit var layoutIntervals: LinearLayout
@@ -111,6 +116,11 @@ class BlackoutDetailsActivity : AppCompatActivity() {
         ivStatusIcon = findViewById(R.id.ivStatusIcon)
         tvStatusTitle = findViewById(R.id.tvStatusTitle)
         tvStatusSubtitle = findViewById(R.id.tvStatusSubtitle)
+        cardEmergency = findViewById(R.id.cardEmergency)
+        tvEmergencyMessage = findViewById(R.id.tvEmergencyMessage)
+        cardChanges = findViewById(R.id.cardChanges)
+        tvChangesTitle = findViewById(R.id.tvChangesTitle)
+        tvChangesList = findViewById(R.id.tvChangesList)
         timelineView = findViewById(R.id.timelineView)
         toggleDayGroup = findViewById(R.id.toggleDayGroup)
         layoutIntervals = findViewById(R.id.layoutIntervals)
@@ -138,7 +148,12 @@ class BlackoutDetailsActivity : AppCompatActivity() {
 
         btnOpenBrowser.setOnClickListener {
             val prefs = getSharedPreferences(OutageScheduler.PREFS_NAME, Context.MODE_PRIVATE)
-            val url = prefs.getString(OutageScheduler.KEY_URL, OutageScheduler.DEFAULT_URL) ?: OutageScheduler.DEFAULT_URL
+            val dataSource = prefs.getString(OutageScheduler.KEY_DATA_SOURCE, OutageScheduler.SOURCE_ENERGY_UA)
+            val url = if (dataSource == OutageScheduler.SOURCE_POE) {
+                PoeScheduleClient.POE_PUBLIC_URL
+            } else {
+                prefs.getString(OutageScheduler.KEY_URL, OutageScheduler.DEFAULT_URL) ?: OutageScheduler.DEFAULT_URL
+            }
             try {
                 val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                 startActivity(browserIntent)
@@ -172,22 +187,47 @@ class BlackoutDetailsActivity : AppCompatActivity() {
 
         // 1. Черга та час оновлення
         val prefs = getSharedPreferences(OutageScheduler.PREFS_NAME, Context.MODE_PRIVATE)
-        val url = prefs.getString(OutageScheduler.KEY_URL, OutageScheduler.DEFAULT_URL) ?: OutageScheduler.DEFAULT_URL
-        val queuePart = url.substringAfterLast("/cherga/", "").replace("-", ".")
-        tvQueueBadge.text = if (queuePart.isNotEmpty()) {
-            getString(R.string.queue_label, queuePart)
+        val dataSource = prefs.getString(OutageScheduler.KEY_DATA_SOURCE, OutageScheduler.SOURCE_ENERGY_UA)
+        if (dataSource == OutageScheduler.SOURCE_POE) {
+            val poeQueue = prefs.getString(OutageScheduler.KEY_POE_QUEUE, OutageScheduler.DEFAULT_POE_QUEUE)
+                ?: OutageScheduler.DEFAULT_POE_QUEUE
+            tvQueueBadge.text = getString(R.string.poe_queue_badge, poeQueue)
         } else {
-            getString(R.string.app_name)
+            val url = prefs.getString(OutageScheduler.KEY_URL, OutageScheduler.DEFAULT_URL) ?: OutageScheduler.DEFAULT_URL
+            val queuePart = url.substringAfterLast("/cherga/", "").replace("-", ".")
+            tvQueueBadge.text = if (queuePart.isNotEmpty()) {
+                getString(R.string.queue_label, queuePart)
+            } else {
+                getString(R.string.app_name)
+            }
         }
 
         val dateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
         tvLastUpdated.text = getString(R.string.last_updated, dateFormat.format(Date(cache.timestamp)))
 
-        // 2. Статус-банер
+        // 2. Аварійне попередження та зміни в графіку
+        if (!cache.emergencyMessage.isNullOrBlank()) {
+            cardEmergency.visibility = View.VISIBLE
+            tvEmergencyMessage.text = cache.emergencyMessage
+        } else {
+            cardEmergency.visibility = View.GONE
+        }
+
+        val changes = cache.changes
+        if (!changes.isNullOrEmpty()) {
+            cardChanges.visibility = View.VISIBLE
+            val changesTime = dateFormat.format(Date(cache.changesTimestamp ?: cache.timestamp))
+            tvChangesTitle.text = getString(R.string.changes_title, changesTime)
+            tvChangesList.text = changes.joinToString("\n") { "• $it" }
+        } else {
+            cardChanges.visibility = View.GONE
+        }
+
+        // 3. Статус-банер
         val info = scheduler.getCountdownInfo(cache)
         updateStatusBanner(info)
 
-        // 3. Відображення вибраного дня (сьогодні/завтра)
+        // 4. Відображення вибраного дня (сьогодні/завтра)
         renderDaySchedule()
     }
 
@@ -257,7 +297,11 @@ class BlackoutDetailsActivity : AppCompatActivity() {
             val tvIntervalStatus = itemView.findViewById<TextView>(R.id.tvIntervalStatus)
 
             tvIntervalTime.text = "${interval.start} — ${interval.end}"
-            val durationText = if (interval.duration.contains("год")) interval.duration else "${interval.duration} год."
+            val durationText = if (interval.duration.contains("год") || interval.duration.contains("хв")) {
+                interval.duration
+            } else {
+                "${interval.duration} год."
+            }
             tvIntervalDuration.text = durationText
 
             // Визначення статусу інтервалу
@@ -312,9 +356,10 @@ class BlackoutDetailsActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                val cachedData = scheduler.fetchScheduleFromWeb()
+                val cachedData = scheduler.forceRefresh()
                 if (cachedData != null) {
                     displayCache(cachedData)
+                    ExampleChipReceiver.triggerImmediateUpdate(this@BlackoutDetailsActivity)
                 } else {
                     tvEmptyState.visibility = View.VISIBLE
                     tvEmptyState.text = getString(R.string.no_data_check_settings)
